@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         能不能好好说话？
 // @namespace    https://lab.magiconch.com/nbnhhsh
-// @version      0.15
-// @description  首字母缩写划词翻译工具
+// @version      0.16
+// @description  拼音首字母缩写划词翻译工具，支持整段解析、我的词库与深色模式
 // @author       itorr
 // @license      MIT
 // @icon         https://lab.magiconch.com/favicon.ico

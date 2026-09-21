@@ -9,38 +9,133 @@
 </head>
 <body>
 	<div id="el">
-		<textarea v-model.trim="text" placeholder="输入含有首字母缩写的文字" @input="nbnhhsh"></textarea>
-		<div class="nbnhhsh-box nbnhhsh-box-doc">
-			<div class="nbnhhsh-loading" v-if="loading">
-				加载中…
+		<div class="top-bar">
+			<div class="tabs">
+				<button class="tab" :class="{'is-active':tab==='guess'}" @click="tab='guess'">单词查询</button>
+				<button class="tab" :class="{'is-active':tab==='parse'}" @click="tab='parse'">整段解析</button>
+				<button class="tab" :class="{'is-active':tab==='lib'}" @click="tab='lib'">我的词库 <span class="tab-count" v-if="store.history.length">{{store.history.length}}</span></button>
 			</div>
-			<div class="nbnhhsh-tag-list" v-else-if="tags.length">
-				<div class="nbnhhsh-tag-item" v-for="tag in tags">
-					<h4>{{tag.name}}</h4>
-					<div class="nbnhhsh-tran-list" v-if="tag.trans">
-						<span class="nbnhhsh-tran-item" v-for="tran in transArrange(tag.trans)">
-							{{tran.text}}<sub v-if="tran.sub">{{tran.sub}}</sub>
-						</span>
-					</div>
-					<div class="nbnhhsh-notran-box" v-else-if="tag.trans===null">
-						无对应文字
-					</div>
-					<div v-else-if="tag.inputting && tag.inputting.length !==0">
-						<div class="nbnhhsh-inputting-list">
-							<h5>有可能是</h5>
-							<span class="nbnhhsh-inputting-item" v-for="input in tag.inputting">{{input}}</span>
+			<button class="theme-btn" @click="cycleTheme" :title="themeTitle">
+				<span v-if="themeMode==='light'">🌞 浅色</span>
+				<span v-else-if="themeMode==='dark'">🌙 深色</span>
+				<span v-else>🖥 跟随系统</span>
+			</button>
+		</div>
+
+		<!-- 单词查询 -->
+		<template v-if="tab==='guess'">
+			<textarea v-model.trim="text" placeholder="输入含有首字母缩写的文字，例如 xswl、yyds" @input="nbnhhsh"></textarea>
+			<div class="nbnhhsh-box nbnhhsh-box-doc">
+				<div class="nbnhhsh-loading" v-if="loading">
+					加载中…
+				</div>
+				<div class="nbnhhsh-tag-list" v-else-if="tags.length">
+					<div class="nbnhhsh-tag-item" v-for="tag in tags">
+						<h4>{{tag.name}}<span class="nbnhhsh-fav" :class="{'is-fav':tag.fav}" @click="toggleFav(tag)" :title="tag.fav?'取消收藏':'收藏'">★</span></h4>
+						<div class="nbnhhsh-tran-list" v-if="tag.trans">
+							<span class="nbnhhsh-tran-item" :class="{'is-custom':tag.custom}" v-for="(tran,ti) in transArrange(tag.trans)">
+								{{tran.text}}<sub v-if="tran.sub">{{tran.sub}}</sub><em v-if="tag.custom && ti===0">自定义</em>
+							</span>
 						</div>
+						<div class="nbnhhsh-notran-box" v-else-if="tag.trans===null">
+							无对应文字
+						</div>
+						<div v-else-if="tag.inputting && tag.inputting.length !==0">
+							<div class="nbnhhsh-inputting-list">
+								<h5>有可能是</h5>
+								<span class="nbnhhsh-inputting-item" v-for="input in tag.inputting">{{input}}</span>
+							</div>
+						</div>
+						<div class="nbnhhsh-notran-box" v-else @click.prevent="submitTran(tag.name)">
+							尚未录入，我来提交对应文字
+						</div>
+						<a v-if="tag.trans!==null" @click.prevent="submitTran(tag.name)" class="nbnhhsh-add-btn" title="我来提交对应文字"></a>
 					</div>
-					<div class="nbnhhsh-notran-box" v-else @click.prevent="submitTran(tag.name)">
-						尚未录入，我来提交对应文字
-					</div>
-					<a v-if="tag.trans!==null" @click.prevent="submitTran(tag.name)" class="nbnhhsh-add-btn" title="我来提交对应文字"></a>
+				</div>
+				<div class="nbnhhsh-loading" v-else-if="text">
+					没有匹配到拼音首字母缩写
 				</div>
 			</div>
-			<div class="nbnhhsh-loading" v-else-if="text">
-				没有匹配到拼音首字母缩写
+		</template>
+
+		<!-- 整段解析 -->
+		<template v-if="tab==='parse'">
+			<textarea v-model.trim="parseText" placeholder="粘贴一整段含有拼音首字母缩写的文字，缩写会自动加下划线，点击即可查看候选解释" @input="onParseInput"></textarea>
+			<div class="parse-toolbar">
+				<button @click="copyParsed" :disabled="!segments.some(s=>s.tag)">一键复制带解释的译文</button>
+				<span class="parse-status" v-if="parseLoading">解析中…</span>
+				<span class="parse-status" v-else-if="segments.some(s=>s.tag)">已识别 {{segments.filter(s=>s.tag).length}} 个缩写</span>
 			</div>
-		</div>
+			<div class="parse-result" v-if="parseText">
+				<template v-for="(seg,i) in segments">
+					<span v-if="!seg.tag" :key="'t'+i">{{seg.text}}</span>
+					<a v-else class="parse-abbr" :class="{'is-open':openName===seg.tag.name,'is-custom':seg.tag.custom}" :key="'a'+i" @click="openAbbr($event,seg.tag)"><u>{{seg.tag.name}}</u></a>
+				</template>
+			</div>
+			<div class="parse-empty" v-else>粘贴文字后，这里会标出全部缩写</div>
+
+			<div class="parse-pop" v-if="openTag" :style="popStyle" @mousedown.prevent>
+				<h4>{{openTag.name}}<span class="nbnhhsh-fav" :class="{'is-fav':openTag.fav}" @click="toggleFav(openTag)" :title="openTag.fav?'取消收藏':'收藏'">★</span></h4>
+				<div class="nbnhhsh-tran-list" v-if="openTag.trans">
+					<span class="nbnhhsh-tran-item" :class="{'is-custom':openTag.custom,'is-pick':isPicked(openTag,tran.text)}" v-for="tran in transArrange(openTag.trans)" @click="pickTran(openTag,tran.text)">
+						{{tran.text}}<sub v-if="tran.sub">{{tran.sub}}</sub><em v-if="openTag.custom">自定义</em>
+					</span>
+				</div>
+				<div class="nbnhhsh-notran-box" v-else-if="openTag.trans===null">无对应文字</div>
+				<div v-else-if="openTag.inputting && openTag.inputting.length !==0">
+					<div class="nbnhhsh-inputting-list">
+						<h5>有可能是</h5>
+						<span class="nbnhhsh-inputting-item" v-for="input in openTag.inputting">{{input}}</span>
+					</div>
+				</div>
+				<div class="nbnhhsh-notran-box" v-else @click.prevent="submitTran(openTag.name)">尚未录入，我来提交对应文字</div>
+				<div class="parse-pop-custom">
+					<input v-model="customDraft" placeholder="添加/修改自定义解释（优先于接口结果）" @keydown.enter.stop @keyup.enter="saveCustom(openTag)">
+					<button @click="saveCustom(openTag)">保存</button>
+				</div>
+			</div>
+		</template>
+
+		<!-- 我的词库 -->
+		<template v-if="tab==='lib'">
+			<div class="lib-toolbar">
+				<div class="lib-filter">
+					<button :class="{'is-active':libFilter==='all'}" @click="libFilter='all'">全部</button>
+					<button :class="{'is-active':libFilter==='fav'}" @click="libFilter='fav'">收藏</button>
+					<button :class="{'is-active':libFilter==='custom'}" @click="libFilter='custom'">自定义</button>
+					<button :class="{'is-active':libFilter==='history'}" @click="libFilter='history'">历史</button>
+				</div>
+				<div class="lib-actions">
+					<button @click="exportLib">导出</button>
+					<button @click="$refs.fileInput.click()">导入</button>
+					<button @click="clearHistory" v-if="store.history.length">清空历史</button>
+					<button class="danger" @click="clearAll">一键清空</button>
+					<input ref="fileInput" type="file" accept=".json,application/json" @change="importLib" hidden>
+				</div>
+			</div>
+			<p class="lib-hint">自定义解释展示时优先于接口结果；词库保存在本地浏览器中，刷新不丢失，可导出备份。</p>
+			<div class="lib-list" v-if="libEntries.length">
+				<div class="lib-item" v-for="entry in libEntries" :key="entry.name">
+					<div class="lib-item-main">
+						<h4>{{entry.name}}
+							<span class="nbnhhsh-fav" :class="{'is-fav':store.favs[entry.name]}" @click="toggleFavName(entry.name)" title="收藏">★</span>
+							<em class="badge badge-custom" v-if="store.custom[entry.name]">自定义</em>
+							<em class="badge badge-history" v-if="entry.historyTime">查于 {{formatTime(entry.historyTime)}}</em>
+						</h4>
+						<div class="lib-custom-row">
+							<input :value="store.custom[entry.name] || ''" @input="customDrafts[entry.name]=$event.target.value" placeholder="自定义解释（留空则使用接口结果）">
+							<button @click="saveCustomName(entry.name)">保存</button>
+							<button @click="removeEntry(entry.name)" class="danger">删除</button>
+						</div>
+					</div>
+				</div>
+			</div>
+			<div class="lib-empty" v-else>
+				暂无记录，去<a href="javascript:void(0)" @click="tab='guess'">查询</a>或<a href="javascript:void(0)" @click="tab='parse'">整段解析</a>试试吧
+			</div>
+		</template>
+
+		<div class="toast" v-if="toast">{{toast}}</div>
 	</div>
 	<div class="content-box">
 
@@ -48,13 +143,13 @@
 		<p>社交平台上通过拼音首字母缩写指代特定词句的情况越来越多，为了让更多人能勉强理解这一门另类沟通方式、做了这一个划词转义工具。</p>
 
 		<h2>什么是用户脚本？</h2>
-		<p>用户脚本是一段代码，它们能够优化您的网页浏览体验。安装之后，有些脚本能为网站添加新的功能，有些能使网站的界面更加易用，有些则能隐藏网站上烦人的部分内容。用户脚本都是由用户编写并向全世界发表的，您可以免费安装，轻松体验。</p>
+		<p>用户脚本是一段代码，它们能够优化您的网页浏览体验。安装之后，有些脚本能为网站添加新的功能，有些能使网站的界面更加易用，有些能隐藏网站的烦人的部分内容。用户脚本都是由用户编写并向全世界发表的，您可以免费安装，轻松体验。</p>
 		<p>用户脚本管理器安装过程可参考 <a href="https://greasyfork.org/zh-CN/#home-step-1" target="_blank">https://greasyfork.org/</a> 首页的，<b>安装一个用户脚本管理器</b> 章节</p>
 
 		<h2>如何安装网页划词释义用户脚本？</h2>
 		<p>安装好用户脚本管理器之后，访问 <a href="nbnhhsh.user.js">nbnhhsh.user.js</a> 完成脚本安装</p>
 		<blockquote>
-			<p>脚本版本目前会在 <b>微博</b>、<b>贴吧</b>、<b>哔哩哔哩</b> 页面下运行，划词时会提交所选文字以用于转义。</p>
+			<p>脚本版本目前会在 <b>微博</b>、<b>贴吧</b>、<b>哔哩哔哩</b> 页面下运行，划词时会提交所选文字以用于转义。选中长句会批量列出全部缩写，↑↓ 切换、回车复制。</p>
 		</blockquote>
 
 		<h2>如何在更多网站上使用这个用户脚本？</h2>
@@ -76,11 +171,6 @@
 		<pre>&lt;script src="https://cdn.bootcss.com/vue/2.6.11/vue.min.js"&gt;&lt;/script&gt;
 &lt;script src="https://lab.magiconch.com/nbnhhsh/nbnhhsh.user.js"&gt;&lt;/script&gt;</pre>
 
-		<h2>打赏</h2>
-		<p>
-			<img src="sponsor.png" alt="支付宝打赏">
-		</p>
-
 		<h2>仓库地址</h2>
 		<p><a href="https://github.com/itorr/nbnhhsh" target="_blank">https://github.com/itorr/nbnhhsh</a></p>
 
@@ -89,104 +179,282 @@
 
 	</div>
 
-	<script src="/vue.2.6.11.min.js"></script>
+	<script src="vue.2.6.11.min.js"></script>
 	<script src="nbnhhsh.user.js"></script>
 	<script>
 		let guessTimer;
+		let parseTimer;
+
+		const { lib, guess, copyText } = Nbnhhsh;
+
 		const app = new Vue({
 			el,
 			data: {
+				tab:'guess',
 				text:'',
 				tags:[],
 				waiting:false,
 				loading:false,
+
+				parseText:'',
+				segments:[],
+				parseLoading:false,
+				openName:'',
+				openTag:null,
+				popStyle:{},
+				customDraft:'',
+
+				store: lib.data(),
+				libFilter:'all',
+				customDrafts:{},
+
+				themeMode: Nbnhhsh.theme.value,
+				toast:''
+			},
+			computed:{
+				themeTitle(){
+					return this.themeMode === 'auto' ? '当前跟随系统，点击切换：浅色 → 深色 → 跟随系统'
+						: this.themeMode === 'light' ? '当前浅色，点击切换：浅色 → 深色 → 跟随系统'
+						: '当前深色，点击切换：浅色 → 深色 → 跟随系统';
+				},
+				libEntries(){
+					let names = {};
+					this.store.history.forEach(item=>{ names[item.name] = item.time; });
+					Object.keys(this.store.favs).forEach(n=>{ if(this.store.favs[n] && !(n in names)) names[n] = 0; });
+					Object.keys(this.store.custom).forEach(n=>{ if(!(n in names)) names[n] = 0; });
+					return Object.keys(names)
+						.filter(name=>{
+							if(this.libFilter === 'fav') return !!this.store.favs[name];
+							if(this.libFilter === 'custom') return !!this.store.custom[name];
+							if(this.libFilter === 'history') return names[name] > 0;
+							return true;
+						})
+						.sort((a,b)=>(names[b]||0)-(names[a]||0) || a.localeCompare(b))
+						.map(name=>({ name, historyTime:names[name] }));
+				}
 			},
 			methods: {
 				...Nbnhhsh,
+				showToast(msg){
+					this.toast = msg;
+					clearTimeout(this._toastTimer);
+					this._toastTimer = setTimeout(_=>{ this.toast = ''; }, 1800);
+				},
+				cycleTheme(){
+					this.themeMode = Nbnhhsh.theme.cycleTheme();
+				},
+				syncStore(){
+					this.store = Object.assign({}, lib.data(), {
+						history: lib.data().history.slice(),
+						favs: Object.assign({}, lib.data().favs),
+						custom: Object.assign({}, lib.data().custom),
+						choice: Object.assign({}, lib.data().choice)
+					});
+					// 已展示的标签也要同步自定义/收藏状态
+					this.tags = this.tags.map(tag=>{
+						let custom = (this.store.custom[tag.name] || '').trim();
+						let next = Object.assign({}, tag);
+						if(custom){ next._origTrans = tag._origTrans || tag.trans || null; next.trans = [custom]; next.custom = true; }
+						else if(tag.custom){ next.custom = false; next.trans = tag._origTrans || null; delete next._origTrans; }
+						next.fav = !!this.store.favs[tag.name];
+						return next;
+					});
+					if(this.openTag){
+						let custom = (this.store.custom[this.openTag.name] || '').trim();
+						if(custom){ this.openTag.trans = [custom]; this.openTag.custom = true; }
+						else if(this.openTag.custom){ this.openTag.custom = false; }
+						this.openTag.fav = !!this.store.favs[this.openTag.name];
+					}
+				},
 				nbnhhsh(){
-					// app.tags = [];
-					// app.waiting = true;
-
 					clearTimeout(guessTimer);
 					guessTimer = setTimeout(_=>{
 						let text = this.text;
-
-						// app.waiting = false;
-
-						if(!text || !/[a-z0-9]{2,}/i.test(text)) return app.tags = [];
-
-						app.loading = true;
-						this.guess(text,data=>{
-							app.loading = false;
-							if(!data.length){
-								app.show = false;
-							}else{
-								app.tags = data;
-							}
+						if(!text || !/[a-z0-9]{2,}/i.test(text)) return this.tags = [];
+						this.loading = true;
+						guess(text,data=>{
+							this.loading = false;
+							this.tags = data.length ? data : [];
 						});
 					},400);
+				},
+				toggleFav(tag){
+					lib.toggleFav(tag.name);
+				},
 
-					// location.hash = text?'#/text/'+encodeURIComponent(text):'';
+				/* ---- 整段解析 ---- */
+				onParseInput(){
+					clearTimeout(parseTimer);
+					this.openTag = null;
+					this.openName = '';
+					let text = this.parseText;
+					if(!text){ this.segments = []; return; }
+					parseTimer = setTimeout(_=> this.runParse(text), 350);
+				},
+				runParse(text){
+					let re = /[a-z0-9]{2,}/ig;
+					let segs = [];
+					let last = 0, m, tokenSet = [];
+					while((m = re.exec(text)) !== null){
+						if(m.index > last) segs.push({ text:text.slice(last,m.index) });
+						segs.push({ text:m[0], pending:true });
+						tokenSet.push(m[0].toLowerCase());
+						last = m.index + m[0].length;
+					}
+					if(last < text.length) segs.push({ text:text.slice(last) });
+					this.segments = segs;
+
+					let tokens = Array.from(new Set(tokenSet));
+					if(!tokens.length) return;
+
+					this.parseLoading = true;
+					guess(tokens.join(','), data=>{
+						this.parseLoading = false;
+						let map = {};
+						data.forEach(tag=>{ map[tag.name] = tag; });
+						this.segments = segs.map(seg=>{
+							if(!seg.pending) return seg;
+							let tag = map[seg.text.toLowerCase()];
+							return tag ? { text:seg.text, tag } : { text:seg.text };
+						});
+					});
+				},
+				openAbbr(e,tag){
+					if(this.openName === tag.name){
+						this.openName = '';
+						this.openTag = null;
+						return;
+					}
+					this.openName = tag.name;
+					this.openTag = tag;
+					this.customDraft = this.store.custom[tag.name] || '';
+					this.$nextTick(_=>{
+						let pop = this.$el.querySelector('.parse-pop');
+						if(!pop) return;
+						let rect = e.currentTarget.getBoundingClientRect();
+						let pw = pop.offsetWidth, ph = pop.offsetHeight;
+						let left = Math.min(rect.left, window.innerWidth - pw - 12);
+						let top = rect.bottom + 6;
+						if(top + ph > window.innerHeight - 12) top = Math.max(12, rect.top - ph - 6);
+						this.popStyle = {
+							left: Math.max(8, left) + 'px',
+							top: (top + (document.documentElement.scrollTop || document.body.scrollTop)) + 'px'
+						};
+					});
+				},
+				isPicked(tag,text){
+					if(tag.custom) return true;
+					return (this.store.choice[tag.name] || (tag.trans && tag.trans[0])) === text;
+				},
+				pickTran(tag,text){
+					lib.setChoice(tag.name,text);
+					this.showToast('已选择「'+text+'」');
+				},
+				saveCustom(tag){
+					let name = tag ? tag.name : this.openName;
+					lib.setCustom(name, this.customDraft);
+					this.showToast(this.customDraft.trim() ? '自定义解释已保存，展示优先于接口结果' : '已移除自定义解释');
+					if(this.openTag && this.openTag.name === name){
+						this.openTag = null;
+						this.openName = '';
+					}
+					if(this.parseText) this.runParse(this.parseText);
+				},
+				tagRenderText(tag){
+					let custom = (this.store.custom[tag.name] || '').trim();
+					if(custom) return custom;
+					if(this.store.choice[tag.name]) return this.store.choice[tag.name];
+					if(tag.trans && tag.trans.length){
+						let arr = this.transArrange(tag.trans);
+						return (arr[0] && arr[0].text) || tag.trans[0];
+					}
+					return '';
+				},
+				copyParsed(){
+					let out = this.segments.map(seg=>{
+						if(!seg.tag) return seg.text;
+						let explain = this.tagRenderText(seg.tag);
+						return explain ? seg.text + '(' + explain + ')' : seg.text;
+					}).join('');
+					copyText(out, ok=>{
+						this.showToast(ok ? '带解释译文已复制' : '复制失败，请手动选择');
+					});
+				},
+
+				/* ---- 我的词库 ---- */
+				toggleFavName(name){ lib.toggleFav(name); },
+				saveCustomName(name){
+					lib.setCustom(name, this.customDrafts[name] || '');
+					this.$set(this.customDrafts, name, '');
+					this.showToast('已保存');
+				},
+				removeEntry(name){
+					if(!confirm('确定删除「'+name+'」的全部本地记录（收藏/自定义/历史）？')) return;
+					lib.remove(name);
+					this.showToast('已删除');
+				},
+				clearHistory(){
+					if(!confirm('确定清空全部查询历史？收藏与自定义解释会保留。')) return;
+					lib.clearHistory();
+					this.showToast('历史已清空');
+				},
+				clearAll(){
+					if(!confirm('确定一键清空词库？将删除全部历史、收藏、自定义解释且无法恢复（建议先导出）。')) return;
+					lib.clearAll();
+					this.customDrafts = {};
+					this.showToast('词库已清空');
+				},
+				exportLib(){
+					let blob = new Blob([lib.exportData()], { type:'application/json' });
+					let a = document.createElement('a');
+					a.href = URL.createObjectURL(blob);
+					a.download = 'nbnhhsh-wordlib-' + new Date().toISOString().slice(0,10) + '.json';
+					a.click();
+					URL.revokeObjectURL(a.href);
+					this.showToast('词库已导出');
+				},
+				importLib(e){
+					let file = e.target.files[0];
+					e.target.value = '';
+					if(!file) return;
+					let reader = new FileReader();
+					reader.onload = _=>{
+						try{
+							let obj = JSON.parse(reader.result);
+							lib.importData(obj);
+							this.showToast('导入成功');
+						}catch(err){
+							alert('导入失败：文件不是有效的词库 JSON');
+						}
+					};
+					reader.readAsText(file);
+				},
+				formatTime(ts){
+					if(!ts) return '';
+					let d = new Date(ts);
+					let pad = n => (n<10?'0':'')+n;
+					return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes());
 				}
+			},
+			created(){
+				lib.subscribe(_=> this.syncStore());
+				document.addEventListener('click', e=>{
+					if(!this.openTag) return;
+					if(e.target.closest('.parse-pop') || e.target.closest('.parse-abbr')) return;
+					this.openTag = null;
+					this.openName = '';
+				});
 			}
 		});
 
 		const searchStringArray = location.hash.substr(2).split('/');
-
 		const Search = {};
-
 		for(let i = 0;i<searchStringArray.length;i+=2){
 			Search[decodeURIComponent(searchStringArray[i])] = decodeURIComponent(searchStringArray[i+1]);
 		}
-
-
 		app.text = Search.text || '';
-
-		app.nbnhhsh();
-
-
-		const loadScript = (src,onLoad=_=>{},el) =>{
-			el = document.createElement('script');
-			el.src = src;
-			el.onload = onLoad;
-			document.body.appendChild(el);
-		};
-
-		window._hmt = [];
-		const gtmId = 'G-13BQC1VDD8';
-		window.dataLayer = [
-			['js', new Date()],
-			['config', gtmId]
-		];
-		window.gtag = function(){dataLayer.push(arguments)};
-		setTimeout(_=>{
-			loadScript('https://hm.baidu.com/hm.js?f4e477c61adf5c145ce938a05611d5f0');
-			loadScript('https://www.googletagmanager.com/gtag/js?id='+gtmId);
-		},1400);
+		if(app.text) app.nbnhhsh();
 	</script>
-
-<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-4293992693235467"
-     crossorigin="anonymous"></script>
-
-<style>
-.mgads{
-	height:100px;
-	max-width:600px;
-	margin:0 auto;
-	overflow: hidden;
-}
-</style>
-<div class="mgads">
-	<ins class="adsbygoogle"
-       	style="display:block"
-		data-ad-client="ca-pub-4293992693235467"
-		data-ad-slot="6824387080"
-		data-ad-format="horizontal"
-		data-full-width-responsive="true"></ins>
-</div>
-<script>
-     (adsbygoogle = window.adsbygoogle || []).push({});
-</script>
 
 </body>
 </html>
